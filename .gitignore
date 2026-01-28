@@ -1,0 +1,16 @@
+# Environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Data (Crucial: Don't push large CSVs)
+data/raw/
+data/processed/
+
+# IDE settings
+.vscode/
+.idea/
