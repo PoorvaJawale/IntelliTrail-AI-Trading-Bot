@@ -19,12 +19,12 @@ entry_price = test_df.iloc[0]['close']
 
 run_simulation_with_ai(test_df, entry_price, ai_model)
 
-# 1. Run Static 2% Simulation
-static_trades, _ = run_simulation(test_df, entry_price, risk_multiplier=2.0)
+# 1. Run Static 2% Simulation (Unpack both values)
+static_trades, static_sl_history = run_simulation(test_df, entry_price, risk_multiplier=2.0)
 static_results = calculate_metrics(test_df, static_trades, entry_price)
 
-# 2. Run IntelliTrail (AI) Simulation
-ai_trades = run_simulation_with_ai(test_df, entry_price, ai_model)
+# 2. Run IntelliTrail (AI) Simulation (Unpack both values)
+ai_trades, ai_sl_history = run_simulation_with_ai(test_df, entry_price, ai_model)
 ai_results = calculate_metrics(test_df, ai_trades, entry_price)
 
 print("\n--- BATTLE OF THE STRATEGIES ---")

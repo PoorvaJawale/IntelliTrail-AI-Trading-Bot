@@ -1,16 +1,38 @@
 import sys
 import os
+import joblib  # <--- ADD THIS LINE HERE
 
-# Adds the parent directory (IntelliTrail) to the system path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# 1. Get the absolute path to the 'dashboard' folder
+current_file_path = os.path.abspath(__file__)
+dashboard_dir = os.path.dirname(current_file_path)
 
-import streamlit as st
-import pandas as pd
-import plotly.graph_objects as go
-from core.data_loader import load_stock_data
-from core.indicators import apply_indicators
-from core.engine import run_simulation_with_ai
-import joblib
+# 2. Get the 'IntelliTrail' root directory (the parent of 'dashboard')
+project_root = os.path.dirname(dashboard_dir)
+
+# 3. Add project root to sys.path if it's not already there
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
+# Now, Python will find the 'core' folder
+try:
+    import streamlit as st
+    import pandas as pd
+    from core.data_loader import load_stock_data
+    from core.indicators import apply_indicators
+    from core.manager_logic import process_portfolio
+    from core.engine import run_simulation_with_ai
+except ModuleNotFoundError as e:
+    st.error(f"Still can't find the core folder. Python is looking here: {sys.path}")
+    st.stop()
+
+# Get the absolute path of the current script (app.py)
+current_dir = os.path.dirname(os.path.abspath(__file__))
+# Get the parent directory (IntelliTrail)
+parent_dir = os.path.dirname(current_dir)
+
+# Add the parent directory to sys.path so 'core' can be found
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 # --- UI CONFIGURATION ---
 st.set_page_config(page_title="IntelliTrail AI Terminal", layout="wide", initial_sidebar_state="expanded")
@@ -98,6 +120,68 @@ features = pd.DataFrame([[current_row['sma_20'], current_row['sma_50'], current_
                          columns=['sma_20', 'sma_50', 'rsi', 'atr'])
 predicted_price = model.predict(features)[0]
 
+# --- PORTFOLIO TAB ---
+with tab_portfolio:
+    st.subheader("🚀 Active Bot Fleet")
+    
+    # Let the user "Deploy" a new bot
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        new_ticker = st.selectbox("Deploy Bot for:", available_stocks, key="deploy_ticker")
+    with col_b:
+        strat = st.radio("Strategy:", ["SELL (Protect)", "BUY (Scout)"])
+    with col_c:
+        trigger = st.number_input("Trigger Price:", value=0.0)
+
+    if st.button("Launch Bot"):
+        st.success(f"Bot successfully deployed for {new_ticker}!")
+
+if st.button("🔄 Refresh All Bots"):
+    results = process_portfolio(st.session_state.active_bots, model)
+    
+    # Create a Summary DataFrame
+    summary_data = []
+    for ticker, res in results.items():
+        summary_data.append({
+            "Ticker": ticker,
+            "Current Price": res['current_price'],
+            "Status": "🔴 EXIT" if res['trades'] else "🟢 ACTIVE",
+            "Latest SL": res['history'][-1] if res['history'] else "N/A"
+        })
+    
+    st.table(pd.DataFrame(summary_data))
+
+# --- MAIN LAYOUT TABS ---
+# This line creates the two tabs and assigns them to variables
+tab_analysis, tab_portfolio = st.tabs(["📊 Individual Analysis", "💼 Live Portfolio Bots"])
+
+# Now you can use "with tab_analysis" for your charts
+with tab_analysis:
+    st.subheader(f"Deep Analysis: {selected_stock}")
+    # ... (put your existing chart and metric code here) ...
+
+# And then the portfolio logic you added last night works here
+with tab_portfolio:
+    st.header("Active Strategy Portfolio")
+    # ... (your bot cards and portfolio table logic goes here) ...
+    
+    # Define a mock portfolio (This will later come from a database or CSV)
+    portfolio_bots = [
+        {"stock": "RELIANCE", "type": "SELL (TSLO)", "target": 2500, "status": "🛡️ Protecting"},
+        {"stock": "TCS", "type": "BUY (TSLO)", "target": 3800, "status": "🎯 Scouting Entry"},
+        {"stock": "INFY", "type": "SELL (TSLO)", "target": 1600, "status": "🔴 Exit Triggered"}
+    ]
+
+    # Create dynamic columns for each bot
+    cols = st.columns(len(portfolio_bots))
+    for i, bot in enumerate(portfolio_bots):
+        with cols[i]:
+            st.subheader(bot["stock"])
+            st.markdown(f"**Strategy:** {bot['type']}")
+            st.metric("Status", bot["status"])
+            if st.button(f"View {bot['stock']} Logs", key=f"bot_{i}"):
+                st.write(f"Detailed logs for {bot['stock']} bot...")
+
 # Calculate dynamic confidence
 prediction_diff = abs(predicted_price - current_price) / current_price
 confidence = min(99.9, 70 + (prediction_diff * 5000)) # Increased sensitivity
@@ -151,3 +235,6 @@ equity_fig.update_layout(template="plotly_dark", height=300, margin=dict(l=10, r
 st.plotly_chart(equity_fig, use_container_width=True)
 
 st.success("Analysis Complete.")
+
+# Temporary debug line at the bottom of app.py
+st.sidebar.write("Debug - Active Bots:", st.session_state.active_bots)
