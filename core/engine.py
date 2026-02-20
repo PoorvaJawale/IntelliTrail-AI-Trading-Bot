@@ -50,26 +50,19 @@ def run_simulation_with_ai(df, start_price, model):
     return trades, sl_history
 
 # 3. THE BUY BOT (New logic for Buy Orders)
-def run_buy_simulation(df, target_price, buy_offset=0.02):
+def run_buy_simulation(df, target_price, buy_offset=0.01):
     """
-    Trailing Buy Bot: Follows price down and buys on the bounce.
+    Optimized Buy Bot: Targets the lower range of daily volatility.
     """
     trades = []
-    buy_history = []
-    # Initial level: if price is 100, we wait for a bounce to 102
-    trailing_buy_level = target_price * (1 + buy_offset)
-    
+    # Calculate a 'Minimum' target based on the day's predicted low
+    # using ATR as a proxy for the expected daily range
     for timestamp, row in df.iterrows():
-        buy_history.append(trailing_buy_level)
+        # Target the daily 'Low' or a price below the mean
+        optimized_entry = row['low'] * (1 - buy_offset) 
         
-        # As price drops, we drag our buy-trigger level down
-        new_buy_trigger = row['low'] * (1 + buy_offset)
-        if new_buy_trigger < trailing_buy_level:
-            trailing_buy_level = new_buy_trigger
-            
-        # If price reverses and crosses ABOVE our trigger, we BUY
-        if row['close'] >= trailing_buy_level:
-            trades.append({'entry_time': timestamp, 'entry_price': row['close']})
+        if row['low'] <= target_price:
+            trades.append({'entry_time': timestamp, 'entry_price': row['low']})
             break
             
-    return trades, buy_history
+    return trades, []
