@@ -2,7 +2,6 @@
 
 **IntelliTrail** is an advanced algorithmic trading terminal designed to replace inefficient, static stop-losses with a dynamic, machine-learning-driven risk engine. Built for the **Nifty 100** constituents, it manages multiple "Agents" (Bots) that adapt to real-time market volatility to maximize profit retention and optimize entry points.
 
----
 
 # 📖 Project Overview
 
@@ -10,7 +9,6 @@ Traditional trading strategies often use a "dumb" fixed-percentage stop loss (e.
 
 **IntelliTrail** solves this by using a **Linear Regression** model to predict price trends and adjust the **Trailing Stop-Loss (TSLO)** dynamically based on the **Average True Range (ATR)**.
 
----
 
 # 🛠️ Core Features & Implementation
 
@@ -28,7 +26,6 @@ Traditional trading strategies often use a "dumb" fixed-percentage stop loss (e.
 
 This allows the stop-loss to tighten during risk conditions and loosen during strong trends.
 
----
 
 ## 2. Multi-Agent Bot System
 
@@ -43,9 +40,6 @@ Entry target formula:
 Entry Target = Daily Low − (ATR × 0.5)
 ```
 
-
----
-
 ## 3. Interactive Command Center (Dashboard)
 
 - **Real-time Monitoring** built using **Streamlit**
@@ -53,7 +47,6 @@ Entry Target = Daily Low − (ATR × 0.5)
 - **Session Persistence:** Uses `st.session_state` to track active bots
 - **Fleet Management:** Centralized **Stats Dashboard** showing system health and total managed shares
 
----
 
 # 📁 Project Structure
 IntelliTrail/
@@ -72,8 +65,6 @@ IntelliTrail/
 │
 └── main.py # CLI simulation & strategy battle script
 
-
----
 
 # 🚀 Getting Started
 
@@ -96,7 +87,6 @@ streamlit run dashboard/app.py
 ```
 
 # 📊 Performance Metrics
-
 The system evaluates performance using Profit Retention %.
 
 This metric measures:
