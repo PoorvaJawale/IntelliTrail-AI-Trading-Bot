@@ -17,46 +17,34 @@ try:
     from core.data_loader import load_stock_data
     from core.indicators import apply_indicators
     from core.engine import run_simulation_with_ai
-except ModuleNotFoundError:
-    st.error("CRITICAL: Could not find the 'core' folder. Ensure app.py is inside the 'dashboard' folder.")
+    from core.bot_orchestrator import BotOrchestrator
+    from supabase import create_client, Client
+except ModuleNotFoundError as e:
+    st.error(f"CRITICAL: Could not find required modules: {e}")
     st.stop()
 
-# --- 3. INITIALIZE SESSION STATE ---
-# Replace the SESSION STATE INITIALIZATION (around line 25) with:
+# --- 3. INITIALIZE SUPABASE CONNECTION ---
+@st.cache_resource
+def init_supabase():
+    """Initialize Supabase client"""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_ANON_KEY")
+    if not url or not key:
+        st.error("Supabase credentials not found in environment variables")
+        st.stop()
+    return create_client(url, key)
 
-if 'active_bots' not in st.session_state:
-    st.session_state.active_bots = {
-        "RELIANCE": {
-            "qty": 50, "strat": "Auto-Scout (Buy)", 
-            "entry_date": "2026-01-15", "pnl": 1525.00,
-            "ai_exec_price": 2480.50, "status": "✅ EXECUTED",
-            "manual_levels": {'5% gain': 2572.50, '10% gain': 2695.00, '2% SL': 2401.00},
-            "logs": ["AI Executed @ ₹2,480.50", "P&L: +₹1,525"]
-        },
-        "TCS": {
-            "qty": 20, "strat": "Auto-Scout (Buy)", 
-            "entry_date": "2026-01-20", "pnl": -700.00,
-            "ai_exec_price": 3785.25, "status": "✅ EXECUTED",
-            "manual_levels": {'2% dip': 3820.00, '5% dip': 3629.00},
-            "logs": ["AI Executed @ ₹3,785.25", "Waiting for sell signal"]
-        }
-    }
+supabase = init_supabase()
 
-    
-    for ticker in list(st.session_state.active_bots.keys()):
-        bot = st.session_state.active_bots[ticker]
-        if 'ai_exec_price' not in bot:
-        # Auto-populate missing data
-            bot['ai_exec_price'] = bot.get('price', 2500) * (0.99 if 'Buy' in bot['strat'] else 1.02)
-            bot['entry_date'] = bot.get('date', datetime.now().strftime('%Y-%m-%d'))
-            bot['status'] = '✅ EXECUTED'
-
+# --- 4. INITIALIZE SESSION STATE ---
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
 if 'model' not in st.session_state:
     st.session_state.model = None
+if 'bot_orchestrator' not in st.session_state:
+    st.session_state.bot_orchestrator = None
 
-# --- 4. UI CONFIGURATION ---
+# --- 5. UI CONFIGURATION ---
 st.set_page_config(page_title="IntelliTrail AI Terminal", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
@@ -68,12 +56,12 @@ st.markdown("""
 
 st.title("🚀 IntelliTrail: AI Risk Management Engine")
 
-# --- 5. GLOBAL DATA & MODEL LOADING ---
+# --- 6. GLOBAL DATA & MODEL LOADING ---
 @st.cache_data
 def load_global_assets():
     raw_data_path = "data/raw/"
     model_path = 'models/trained_models/nifty_model.pkl'
-    
+
     try:
         all_files = os.listdir(raw_data_path)
         available_stocks = sorted(list(set([
@@ -90,42 +78,91 @@ available_stocks, model, raw_data_path = load_global_assets()
 st.session_state.model = model
 st.session_state.data_loaded = True
 
-# --- 6. MAIN LAYOUT TABS ---
+# Initialize Bot Orchestrator
+if st.session_state.bot_orchestrator is None:
+    st.session_state.bot_orchestrator = BotOrchestrator(model, supabase)
+
+# --- 7. DATABASE HELPER FUNCTIONS ---
+@st.cache_data(ttl=5)
+def fetch_active_orders():
+    """Fetch all orders from database"""
+    response = supabase.table('orders').select('*').order('created_at', desc=True).execute()
+    return response.data
+
+def fetch_order_details(order_id):
+    """Fetch complete order details including predictions and manual levels"""
+    order = supabase.table('orders').select('*').eq('id', order_id).single().execute()
+    predictions = supabase.table('ai_predictions').select('*').eq('order_id', order_id).execute()
+    manual_levels = supabase.table('manual_levels').select('*').eq('order_id', order_id).execute()
+    execution_logs = supabase.table('bot_executions').select('*').eq('order_id', order_id).order('timestamp').execute()
+
+    return {
+        'order': order.data,
+        'predictions': predictions.data,
+        'manual_levels': manual_levels.data,
+        'logs': execution_logs.data
+    }
+
+# --- 8. MAIN LAYOUT TABS ---
 tab_stats, tab_analytics, tab_portfolio = st.tabs(["📊 Stats", "📈 Analytics", "💼 Portfolio"])
 
 # --- TAB 1: STATS (Fleet Overview) ---
-# Replace STATS TAB TABLE (around line 127) with:
-
 with tab_stats:
     st.header("Fleet Performance Summary")
-    if st.session_state.active_bots:
-        total_bots = len(st.session_state.active_bots)
-        active_qty = sum(bot['qty'] for bot in st.session_state.active_bots.values())
-        total_pnl = sum(bot.get('pnl', 0) for bot in st.session_state.active_bots.values())
-        
+
+    orders = fetch_active_orders()
+
+    if orders:
+        total_bots = len(orders)
+        total_qty = sum(order['quantity'] for order in orders)
+        total_pnl = sum(order.get('pnl', 0) or 0 for order in orders)
+        executed_count = len([o for o in orders if o['status'] == 'executed'])
+
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Active Bots", total_bots)
-        c2.metric("Total Shares", active_qty)
+        c1.metric("Total Bots", total_bots)
+        c2.metric("Total Shares", total_qty)
         c3.metric("Total P&L", f"₹{total_pnl:,.2f}")
-        c4.metric("Status", "AI LIVE")
-        
-        # FIXED TABLE - Safe column selection
+        c4.metric("Executed", f"{executed_count}/{total_bots}")
+
+        st.markdown("---")
+
         summary_data = []
-        for ticker, bot in st.session_state.active_bots.items():
+        for order in orders:
             summary_data.append({
-                'Stock': ticker,
-                'Qty': bot['qty'],
-                'Strategy': bot['strat'][:15],
-                'Entry Date': bot.get('entry_date', bot.get('date', 'N/A')),
-                'AI Price': f"₹{bot.get('ai_exec_price', 0):,.0f}",
-                'Status': bot['status'],
-                'P&L': bot.get('pnl', 0)
+                'Stock': order['ticker'],
+                'Qty': order['quantity'],
+                'Strategy': order['strategy_type'].upper(),
+                'Entry Date': order.get('entry_date', 'N/A'),
+                'AI Price': f"₹{order.get('ai_executed_price', 0):,.2f}" if order.get('ai_executed_price') else 'Pending',
+                'Status': order['status'].upper(),
+                'P&L': f"₹{order.get('pnl', 0):,.2f}" if order.get('pnl') else '₹0.00'
             })
-        
+
         df_summary = pd.DataFrame(summary_data)
         st.dataframe(df_summary, use_container_width=True, hide_index=True)
+
+        st.markdown("---")
+        st.subheader("Recent Execution Logs")
+
+        for order in orders[:5]:
+            with st.expander(f"{order['ticker']} - {order['strategy_type'].upper()} | {order['status'].upper()}"):
+                details = fetch_order_details(order['id'])
+
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Order ID", order['id'][:8])
+                    st.metric("Quantity", order['quantity'])
+                with col2:
+                    st.metric("Created", order['created_at'][:10])
+                    st.metric("P&L", f"₹{order.get('pnl', 0):,.2f}")
+
+                if details['logs']:
+                    st.markdown("**Execution Steps:**")
+                    for log in details['logs']:
+                        status_emoji = "✅" if log['step_status'] == 'success' else "⏳" if log['step_status'] == 'in_progress' else "❌"
+                        st.caption(f"{status_emoji} {log['execution_step']} - {log['step_status']}")
     else:
-        st.info("No active bots deployed.")
+        st.info("No orders in the system. Deploy your first AI bot from the Portfolio tab!")
 
 
 # --- TAB 2: ANALYTICS (Deep AI Insights) ---
@@ -292,115 +329,141 @@ with tab_portfolio:
         sim_days = st.slider("Sim Days", 5, 60, 30, key="deploy_days")
     
     if st.button("🚀 DEPLOY AI BOT", type="primary", use_container_width=True):
-        ticker_file = f"{new_ticker}_daily.csv"
-        ticker_path = os.path.join(raw_data_path, ticker_file)
-        
-        if os.path.exists(ticker_path):
-            df = load_stock_data(ticker_path)
-            df = apply_indicators(df)
-            sim_df = df.tail(sim_days)
-            
-            if not sim_df.empty:
-                # AI EXECUTION LOGIC
-                if "Buy" in strategy:
-                    ai_exec_price = sim_df['low'].min()  # BUY AT ABSOLUTE LOWEST
-                    manual_levels = {
-                        '2% dip': sim_df['close'].iloc[0] * 0.98,
-                        '5% dip': sim_df['close'].iloc[0] * 0.95,
-                        '10% dip': sim_df['close'].iloc[0] * 0.90
-                    }
-                else:  # Sell
-                    ai_exec_price = sim_df['high'].max()  # SELL AT ABSOLUTE HIGHEST
-                    manual_levels = {
-                        '5% gain': sim_df['close'].iloc[0] * 1.05,
-                        '10% gain': sim_df['close'].iloc[0] * 1.10,
-                        '2% SL': sim_df['close'].iloc[0] * 0.98
-                    }
-                
-                # Store execution results
-                st.session_state.active_bots[new_ticker] = {
-                    'qty': quantity,
-                    'strat': strategy,
-                    'entry_date': str(sim_df.index[0].date()),
-                    'ai_exec_price': ai_exec_price,
-                    'manual_levels': manual_levels,
-                    'status': '✅ EXECUTED',
-                    'logs': [
-                        f"AI Entry Date: {sim_df.index[0].date()}",
-                        f"AI Executed @ ₹{ai_exec_price:,.2f}",
-                        f"Simulated {sim_days} days"
-                    ]
-                }
-                st.success(f"✅ AI Bot EXECUTED {strategy} for {new_ticker}!")
+        with st.spinner(f"Deploying AI Bot for {new_ticker}..."):
+            strategy_type = 'buy' if 'Buy' in strategy else 'sell'
+
+            order_data = {
+                'ticker': new_ticker,
+                'strategy_type': strategy_type,
+                'quantity': quantity,
+                'sim_days': sim_days
+            }
+
+            result = st.session_state.bot_orchestrator.execute_bot(order_data)
+
+            if result['success']:
+                st.success(f"AI Bot successfully deployed for {new_ticker}!")
+
+                st.markdown("---")
+                st.subheader("Execution Summary")
+
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Executed Price", f"₹{result['executed_price']:,.2f}")
+                col2.metric("Confidence", f"{result['confidence']:.1%}")
+                col3.metric("P&L", f"₹{result['pnl']:,.2f}")
+
+                st.markdown("**Manual Comparison Levels:**")
+                for level, price in result['manual_levels'].items():
+                    st.caption(f"{level}: ₹{price:,.2f}")
+
+                fetch_active_orders.clear()
                 st.rerun()
+            else:
+                st.error(f"Failed to deploy bot: {result.get('error', 'Unknown error')}")
     
     # === ACTIVE POSITIONS ===
     st.markdown("---")
     st.header("📊 Active Positions & AI Analysis")
-    
-    if st.session_state.active_bots:
-        for ticker, position in st.session_state.active_bots.items():
-            with st.expander(f"📈 {ticker} | {position['strat']} | Qty: {position['qty']}", expanded=True):
-                
-                # === EXECUTION SUMMARY ===
-                col1, col2, col3 = st.columns(3)
-                col1.metric("🎯 AI Execution Price", f"₹{position['ai_exec_price']:,.2f}")
-                col2.metric("📅 Entry Date", position['entry_date'])
-                col3.metric("🔄 Status", position['status'])
-                
-                # === AI vs MANUAL COMPARISON TABLE ===
-                st.markdown("**🤖 AI vs Manual Execution Levels**")
-                exec_df = pd.DataFrame({
-                    'Method': ['AI Dynamic'] + list(position['manual_levels'].keys()),
-                    'Price': [f"₹{position['ai_exec_price']:,.2f}"] + 
-                            [f"₹{v:,.2f}" for v in position['manual_levels'].values()],
-                    'Advantage': [f"+₹{position['ai_exec_price'] - min(position['manual_levels'].values()):+.2f}"] + 
-                                [f"+₹{position['ai_exec_price'] - v:+.2f}" for v in position['manual_levels'].values()]
-                })
-                st.table(exec_df)
-                
-                # === VISUAL COMPARISON CHART ===
-                prices = [position['ai_exec_price']] + list(position['manual_levels'].values())
-                labels = ['AI'] + list(position['manual_levels'].keys())
-                
-                fig = go.Figure(data=[go.Bar(
-                    x=labels, y=prices,
-                    marker_color=['#00FF88'] + ['#FF6666']*len(position['manual_levels']),
-                    text=[f"₹{p:,.0f}" for p in prices],
-                    textposition='auto'
-                )])
-                fig.update_layout(title="AI vs Manual - Execution Prices", height=400)
-                st.plotly_chart(fig, use_container_width=True)
-                
-                # === DETAILED LOGS ===
-                st.markdown("**📜 AI Execution Log**")
-                for log in position['logs']:
-                    st.caption(f"• {log}")
-                
-                # Terminate button with unique key
-                import time
-                ts = str(int(time.time() * 1000))
-                if st.button(f"🗑️ Close Position", key=f"close_{ticker}_{ts}"):
-                    del st.session_state.active_bots[ticker]
-                    st.rerun()
+
+    active_orders = fetch_active_orders()
+
+    if active_orders:
+        for order in active_orders:
+            details = fetch_order_details(order['id'])
+
+            with st.expander(
+                f"📈 {order['ticker']} | {order['strategy_type'].upper()} | Qty: {order['quantity']} | {order['status'].upper()}",
+                expanded=(order['status'] == 'executed')
+            ):
+
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("AI Execution Price", f"₹{order.get('ai_executed_price', 0):,.2f}" if order.get('ai_executed_price') else 'Pending')
+                col2.metric("Entry Date", order.get('entry_date', 'N/A'))
+                col3.metric("Status", order['status'].upper())
+                col4.metric("P&L", f"₹{order.get('pnl', 0):,.2f}")
+
+                if details['manual_levels']:
+                    st.markdown("**AI vs Manual Execution Levels**")
+
+                    manual_dict = {ml['level_name']: ml['price'] for ml in details['manual_levels']}
+
+                    exec_data = []
+                    ai_price = order.get('ai_executed_price', 0)
+
+                    exec_data.append({
+                        'Method': 'AI Dynamic',
+                        'Price': f"₹{ai_price:,.2f}",
+                        'Advantage': 'Baseline'
+                    })
+
+                    for level_name, price in manual_dict.items():
+                        advantage = ai_price - price if order['strategy_type'] == 'buy' else price - ai_price
+                        exec_data.append({
+                            'Method': level_name,
+                            'Price': f"₹{price:,.2f}",
+                            'Advantage': f"+₹{advantage:+,.2f}"
+                        })
+
+                    exec_df = pd.DataFrame(exec_data)
+                    st.table(exec_df)
+
+                    prices = [ai_price] + list(manual_dict.values())
+                    labels = ['AI'] + list(manual_dict.keys())
+
+                    fig = go.Figure(data=[go.Bar(
+                        x=labels,
+                        y=prices,
+                        marker_color=['#00FF88'] + ['#FF6666'] * len(manual_dict),
+                        text=[f"₹{p:,.0f}" for p in prices],
+                        textposition='auto'
+                    )])
+                    fig.update_layout(
+                        title="AI vs Manual - Execution Prices",
+                        height=400,
+                        template="plotly_dark"
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                if details['predictions']:
+                    st.markdown("**AI Prediction Data**")
+                    pred = details['predictions'][0]
+                    pcol1, pcol2 = st.columns(2)
+                    pcol1.metric("Predicted Price", f"₹{pred['predicted_price']:,.2f}")
+                    pcol2.metric("Confidence", f"{pred.get('confidence_score', 0):.1%}")
+
+                if details['logs']:
+                    st.markdown("**Execution Log**")
+                    for log in details['logs']:
+                        status_emoji = "✅" if log['step_status'] == 'success' else "⏳" if log['step_status'] == 'in_progress' else "❌"
+                        st.caption(f"{status_emoji} {log['execution_step']} - {log['step_status']}")
+
+                if order['status'] != 'cancelled':
+                    if st.button(f"Cancel Order", key=f"cancel_{order['id']}"):
+                        supabase.table('orders').update({'status': 'cancelled'}).eq('id', order['id']).execute()
+                        fetch_active_orders.clear()
+                        st.rerun()
     else:
-        st.info("👆 Deploy your first AI bot above!")
+        st.info("No active positions. Deploy your first AI bot above!")
 
 
-# --- 7. SIDEBAR STATUS ---
+# --- 9. SIDEBAR STATUS ---
 with st.sidebar:
     st.header("📡 AI Engine Status")
     current_hour = datetime.now().hour
     if 9 <= current_hour <= 15:
-        st.success("🟢 Market Open: LIVE Mode")
+        st.success("Market Open: LIVE Mode")
     else:
-        st.success("🟢 Backtest Mode Active")
-    
+        st.success("Backtest Mode Active")
+
     st.divider()
     st.metric("Available Stocks", len(available_stocks))
-    
-    if st.button("🔄 Refresh All Data"):
+
+    orders = fetch_active_orders()
+    active_count = len([o for o in orders if o['status'] != 'cancelled'])
+    st.metric("Active Bots", active_count)
+
+    if st.button("Refresh All Data"):
         st.cache_data.clear()
+        fetch_active_orders.clear()
         st.rerun()
-        st.toast("Data refreshed!")
 

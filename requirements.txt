@@ -13,6 +13,9 @@ joblib
 streamlit
 plotly
 
+# Database
+supabase
+
 # Utilities
 yfinance
 python-dotenv
