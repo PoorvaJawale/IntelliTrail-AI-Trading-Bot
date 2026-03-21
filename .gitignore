@@ -14,3 +14,4 @@ data/processed/
 # IDE settings
 .vscode/
 .idea/
+.env
